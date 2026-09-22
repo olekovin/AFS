@@ -433,7 +433,32 @@ sort_files() {
             write_log "Processed $files_processed out of $file_count files"
         fi
         write_log "$(get_localized_string 'EndScript')"
+        push_heartbeat "$files_processed"
     fi
+}
+
+# Optional run-completed heartbeat for a monitoring system.
+#
+# Off unless heartbeat_url is set in config.ini, so the script stays generic —
+# the URL and the service name are site configuration, not part of this tool.
+#
+# It reports a RUN THAT FINISHED, which for a sorter is the useful signal: a
+# cron job that sorts nothing looks exactly like a cron job that stopped
+# running, and only one of those is a problem. files_sorted rides along so the
+# difference is visible.
+#
+# Never fails the run: a monitoring endpoint that can break the job it watches
+# is worse than no monitoring at all.
+push_heartbeat() {
+    local files_sorted="${1:-0}"
+    local url="${CONFIG[heartbeat_url]:-}"
+    [[ -z "$url" ]] && return 0
+    command -v curl >/dev/null 2>&1 || return 0
+
+    local service="${CONFIG[heartbeat_service]:-afs}"
+    printf 'heartbeat{service="%s"} 1\nservice_last_success_timestamp{service="%s"} %s\nafs_files_sorted_total{service="%s"} %s\n' \
+        "$service" "$service" "$(date +%s)" "$service" "$files_sorted" \
+        | curl -sS --max-time 10 --data-binary @- "$url" >/dev/null 2>&1 || true
 }
 
 # Function to edit configuration value
@@ -635,6 +660,16 @@ destination_naming_pattern=yyyy.MM.dd
 
 # Enable debug mode for detailed logging (true or false)
 debug=false
+
+# Optional: POST a heartbeat after each completed run, for a monitoring system
+# that accepts Prometheus exposition text (VictoriaMetrics, Mimir, a Pushgateway
+# shim). Leave empty to disable, which is the default.
+# A sorter that finds nothing looks identical to a sorter that stopped running,
+# and this is what tells them apart.
+heartbeat_url=
+
+# Name reported in the heartbeat's service label. Defaults to afs.
+heartbeat_service=
 
 # Scheduler action (add, remove, or check)
 scheduler=
